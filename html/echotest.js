@@ -58,18 +58,46 @@ var spinner = null;
 var audioenabled = false;
 var videoenabled = false;
 
+var videoInput;
+var localStream;
+
 var doSimulcast = (getQueryStringValue("simulcast") === "yes" || getQueryStringValue("simulcast") === "true");
 var doSimulcast2 = (getQueryStringValue("simulcast2") === "yes" || getQueryStringValue("simulcast2") === "true");
 var acodec = (getQueryStringValue("acodec") !== "" ? getQueryStringValue("acodec") : null);
 var vcodec = (getQueryStringValue("vcodec") !== "" ? getQueryStringValue("vcodec") : null);
 var simulcastStarted = false;
 
+function openStreamAction() {
+	videoInput.src = "video/video.webm";
+	videoInput.play();
+	const fps = 0;
+	if (videoInput.captureStream) {
+		localStream = videoInput.captureStream(fps);
+	} else if (videoInput.mozCaptureStream) {
+		localStream = videoInput.mozCaptureStream(fps);
+	} else {
+		console.error('Stream capture is not supported');
+		localStream = null;
+	}
+	if (localStream) {
+		console.log('Received local stream.');
+	}
+}
+
 $(document).ready(function() {
 	// Initialize the library (all console debuggers enabled)
+
+	if($('#myvideo').length === 0) {
+		$('#videos').removeClass('hide').show();
+		$('#videoleft').append('<video class="rounded centered" id="myvideo" width=320 height=240 controls loop playsinline muted="muted"/>');
+	}
+	videoInput = document.getElementById('myvideo');
+	openStreamAction();
+
 	Janus.init({debug: "all", callback: function() {
 		// Use a button to start the demo
 		$('#start').one('click', function() {
-			$(this).attr('disabled', true).unbind('click');
+			$(this).attr('disabled', true).unbind('click');			
 			// Make sure the browser supports WebRTC
 			if(!Janus.isWebrtcSupported()) {
 				bootbox.alert("No WebRTC support... ");
@@ -95,11 +123,17 @@ $(document).ready(function() {
 								plugin: "janus.plugin.echotest",
 								opaqueId: opaqueId,
 								success: function(pluginHandle) {
-									$('#details').remove();
+									//$('#details').remove();
 									echotest = pluginHandle;
 									Janus.log("Plugin attached! (" + echotest.getPlugin() + ", id=" + echotest.getId() + ")");
 									// Negotiate WebRTC
-									var body = { "audio": true, "video": true };
+									var body = { "audio": true, 
+												 "video": true, 
+												 "record": true,
+												 "videocodec": "h264",
+												// "audiocodec": "g722",
+												 "filename": "record_test"  
+											   };
 									// We can try and force a specific codec, by telling the plugin what we'd prefer
 									// For simplicity, you can set it via a query string (e.g., ?vcodec=vp9)
 									if(acodec)
@@ -116,6 +150,7 @@ $(document).ready(function() {
 											// If you want to test simulcasting (Chrome and Firefox only), then
 											// pass a ?simulcast=true when opening this demo page: it will turn
 											// the following 'simulcast' property to pass to janus.js to true
+											stream: localStream, // stream input
 											simulcast: doSimulcast,
 											simulcast2: doSimulcast2,
 											success: function(jsep) {
@@ -223,11 +258,11 @@ $(document).ready(function() {
 								onlocalstream: function(stream) {
 									Janus.debug(" ::: Got a local stream :::");
 									Janus.debug(stream);
-									if($('#myvideo').length === 0) {
-										$('#videos').removeClass('hide').show();
-										$('#videoleft').append('<video class="rounded centered" id="myvideo" width=320 height=240 autoplay playsinline muted="muted"/>');
-									}
-									Janus.attachMediaStream($('#myvideo').get(0), stream);
+									// if($('#myvideo').length === 0) {
+									// 	$('#videos').removeClass('hide').show();
+									// 	$('#videoleft').append('<video class="rounded centered" id="myvideo" width=320 height=240 autoplay playsinline muted="muted"/>');
+									// }
+									//Janus.attachMediaStream($('#myvideo').get(0), stream);
 									$("#myvideo").get(0).muted = "muted";
 									if(echotest.webrtcStuff.pc.iceConnectionState !== "completed" &&
 											echotest.webrtcStuff.pc.iceConnectionState !== "connected") {
@@ -239,7 +274,7 @@ $(document).ready(function() {
 												color: 'white'
 											}
 										});
-										// No remote video yet
+										//No remote video yet
 										$('#videoright').append('<video class="rounded centered" id="waitingvideo" width=320 height=240 />');
 										if(spinner == null) {
 											var target = document.getElementById('videoright');
@@ -248,9 +283,11 @@ $(document).ready(function() {
 											spinner.spin();
 										}
 									}
+
 									var videoTracks = stream.getVideoTracks();
 									if(videoTracks === null || videoTracks === undefined || videoTracks.length === 0) {
 										// No webcam
+										Janus.debug('No webcam');
 										$('#myvideo').hide();
 										if($('#videoleft .no-video-container').length === 0) {
 											$('#videoleft').append(
@@ -260,11 +297,13 @@ $(document).ready(function() {
 												'</div>');
 										}
 									} else {
+										Janus.debug('Having stream');
 										$('#videoleft .no-video-container').remove();
 										$('#myvideo').removeClass('hide').show();
 									}
 								},
 								onremotestream: function(stream) {
+									console.log('onremotestream');
 									Janus.debug(" ::: Got a remote stream :::");
 									Janus.debug(stream);
 									var addButtons = false;
@@ -289,6 +328,7 @@ $(document).ready(function() {
 									var videoTracks = stream.getVideoTracks();
 									if(videoTracks === null || videoTracks === undefined || videoTracks.length === 0) {
 										// No remote video
+										Janus.debug("No remote video");
 										$('#peervideo').hide();
 										if($('#videoright .no-video-container').length === 0) {
 											$('#videoright').append(
