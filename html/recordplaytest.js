@@ -55,6 +55,9 @@ var opaqueId = "recordplaytest-"+Janus.randomString(12);
 var spinner = null;
 var bandwidth = 1024 * 1024;
 
+var videoInput;
+var localStream;
+
 var myname = null;
 var recording = false;
 var playing = false;
@@ -66,8 +69,25 @@ var doSimulcast = (getQueryStringValue("simulcast") === "yes" || getQueryStringV
 var doSimulcast2 = (getQueryStringValue("simulcast2") === "yes" || getQueryStringValue("simulcast2") === "true");
 
 
+function openStreamAction() {
+	videoInput.src = "video/video.webm";
+	videoInput.play();
+	const fps = 0;
+	if (videoInput.captureStream) {
+		localStream = videoInput.captureStream(fps);
+	} else if (videoInput.mozCaptureStream) {
+		localStream = videoInput.mozCaptureStream(fps);
+	} else {
+		console.error('Stream capture is not supported');
+		localStream = null;
+	}
+	if (localStream) {
+		console.log('Received local stream.');
+	}
+}
+
 $(document).ready(function() {
-	// Initialize the library (all console debuggers enabled)
+	// Initialize the library (all console debuggers enabled)		
 	Janus.init({debug: "all", callback: function() {
 		// Use a button to start the demo
 		$('#start').one('click', function() {
@@ -231,13 +251,13 @@ $(document).ready(function() {
 										return;
 									Janus.debug(" ::: Got a local stream :::");
 									Janus.debug(stream);
-									$('#videotitle').html("Recording...");
-									$('#stop').unbind('click').click(stop);
-									$('#video').removeClass('hide').show();
-									if($('#thevideo').length === 0)
-										$('#videobox').append('<video class="rounded centered" id="thevideo" width=320 height=240 autoplay playsinline muted="muted"/>');
-									Janus.attachMediaStream($('#thevideo').get(0), stream);
-									$("#thevideo").get(0).muted = "muted";
+									// $('#videotitle').html("Recording...");
+									// $('#stop').unbind('click').click(stop);
+									// $('#video').removeClass('hide').show();
+									// if($('#thevideo').length === 0)
+									// 	$('#videobox').append('<video class="rounded centered" id="thevideo" width=320 height=240 autoplay playsinline muted="muted"/>');
+									// Janus.attachMediaStream($('#thevideo').get(0), stream);
+									//$("#thevideo").get(0).muted = "muted";
 									if(recordplay.webrtcStuff.pc.iceConnectionState !== "completed" &&
 											recordplay.webrtcStuff.pc.iceConnectionState !== "connected") {
 										$("#videobox").parent().block({
@@ -396,6 +416,13 @@ function startRecording() {
 	if(recording)
 		return;
 	// Start a recording
+	$('#videotitle').html("Recording...");
+	$('#stop').unbind('click').click(stop);
+	$('#video').removeClass('hide').show();
+	$('#videobox').append('<video class="rounded centered" id="thevideo" width=320 height=240 autoplay playsinline muted="muted"/>');
+	videoInput = document.getElementById('thevideo');
+	openStreamAction();								
+
 	recording = true;
 	playing = false;
 	bootbox.prompt("Insert a name for the recording (e.g., John Smith says hello)", function(result) {
@@ -427,6 +454,7 @@ function startRecording() {
 				// pass a ?simulcast=true when opening this demo page: it will turn
 				// the following 'simulcast' property to pass to janus.js to true
 				simulcast: doSimulcast,
+				stream: localStream,
 				success: function(jsep) {
 					Janus.debug("Got SDP!");
 					Janus.debug(jsep);
