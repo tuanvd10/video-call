@@ -69,7 +69,7 @@ var doSimulcast2 = (getQueryStringValue("simulcast2") === "yes" || getQueryStrin
 var simulcastStarted = false;
 
 function openStreamAction() {
-	videoInput.src = "demo.mp4";
+	videoInput.src = "video/video.webm";
 	videoInput.play();
 	const fps = 0;
 	if (videoInput.captureStream) {
@@ -98,8 +98,8 @@ $(document).ready(function () {
 	Janus.init({
 		debug: true, callback: function () {
 			// Use a button to start the demo
-			$('#start').one('click', function () {
-				$(this).attr('disabled', true).unbind('click');
+			// $('#start').one('click', function () {
+			// 	$(this).attr('disabled', true).unbind('click');
 
 				if (!Janus.isWebrtcSupported()) {
 					bootbox.alert("No WebRTC support... ");
@@ -224,53 +224,7 @@ $(document).ready(function () {
 															}
 														});
 														videoInput.play();
-													// incoming = bootbox.dialog({
-													// 	message: "Incoming call from " + yourusername + "!",
-													// 	title: "Incoming call",
-													// 	closeButton: false,
-													// 	buttons: {
-													// 		success: {
-													// 			label: "Answer",
-													// 			className: "btn-success",
-													// 			callback: function () {
-													// 				incoming = null;
-													// 				$('#peer').val(result["username"]).attr('disabled', true);
-													// 				videocall.createAnswer(
-													// 					{
-													// 						jsep: jsep,
-													// 						// No media provided: by default, it's sendrecv for audio and video
-													// 						media: { data: true },	// Let's negotiate data channels as well
-													// 						// If you want to test simulcasting (Chrome and Firefox only), then
-													// 						// pass a ?simulcast=true when opening this demo page: it will turn
-													// 						// the following 'simulcast' property to pass to janus.js to true
-													// 						simulcast: doSimulcast,
-													// 						stream: localStream,
-													// 						success: function (jsep) {
-													// 							Janus.debug("Got SDP!");
-													// 							Janus.debug(jsep);
-													// 							var body = { "request": "accept" };
-													// 							videocall.send({ "message": body, "jsep": jsep });
-													// 							$('#peer').attr('disabled', true);
-													// 							$('#call').removeAttr('disabled').html('Hangup')
-													// 								.removeClass("btn-success").addClass("btn-danger")
-													// 								.unbind('click').click(doHangup);
-													// 						},
-													// 						error: function (error) {
-													// 							Janus.error("WebRTC error:", error);
-													// 							bootbox.alert("WebRTC error... " + JSON.stringify(error));
-													// 						}
-													// 					});
-													// 			}
-													// 		},
-													// 		danger: {
-													// 			label: "Decline",
-													// 			className: "btn-danger",
-													// 			callback: function () {
-													// 				doHangup();
-													// 			}
-													// 		}
-													// 	}
-													// });
+												
 												} else if (event === 'accepted') {
 													bootbox.hideAll();
 													var peer = result["username"];
@@ -286,6 +240,13 @@ $(document).ready(function () {
 													$('#call').removeAttr('disabled').html('Hangup')
 														.removeClass("btn-success").addClass("btn-danger")
 														.unbind('click').click(doHangup);
+													
+													videocall.send({ "message": { "request": "set", 
+																				  "record": true, 
+																				  "filename": "/home/bangtv2/MySpace/Working/Develop/video-call/plugins/recordings"
+																				} 
+																   });	
+														
 												} else if (event === 'update') {
 													// An 'update' event may be used to provide renegotiation attempts
 													if (jsep) {
@@ -377,7 +338,7 @@ $(document).ready(function () {
 										// if($('#myvideo').length === 0)
 										// 	$('#videoleft').append('<video class="rounded centered" id="myvideo" width=320 height=240 autoplay playsinline muted="muted"/>');
 										//Janus.attachMediaStream($('#myvideo').get(0), stream);
-										$("#myvideo").get(0).muted = "muted";
+										//$("#myvideo").get(0).muted = "muted";
 										if (videocall.webrtcStuff.pc.iceConnectionState !== "completed" &&
 											videocall.webrtcStuff.pc.iceConnectionState !== "connected") {
 											$("#videoleft").parent().block({
@@ -555,7 +516,7 @@ $(document).ready(function () {
 							window.location.reload();
 						}
 					});
-			});
+		//	});
 		}
 	});
 });
@@ -613,6 +574,7 @@ function doCall() {
 		$('#call').removeAttr('disabled').click(doCall);
 		return;
 	}
+	// set record
 	// Call this user
 	videocall.createOffer(
 		{
