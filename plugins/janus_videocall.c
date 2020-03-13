@@ -357,10 +357,19 @@ typedef struct janus_videocall_message {
 	json_t *message;
 	json_t *jsep;
 } janus_videocall_message;
-static GAsyncQueue *messages = NULL;
-static janus_videocall_message exit_message;
+
+typedef struct janus_videocall {
+	guint64 videocall_id;
+	gint64 start_time;
+	char* record_path;
+	
+}
 
 typedef struct janus_videocall_session {
+	// new attributes
+	gboolean has_started;
+	char* record_path;
+	// end new attributes
 	janus_plugin_session *handle;
 	gchar *username;
 	gboolean has_audio;
@@ -556,6 +565,8 @@ void janus_videocall_create_session(janus_plugin_session *handle, int *error) {
 		return;
 	}
 	janus_videocall_session *session = g_malloc0(sizeof(janus_videocall_session));
+	session->has_started = FALSE;
+	session->record_path = NULL;
 	session->handle = handle;
 	session->has_audio = FALSE;
 	session->has_video = FALSE;
@@ -684,6 +695,10 @@ void janus_videocall_setup_media(janus_plugin_session *handle) {
 	if(g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized))
 		return;
 	janus_videocall_session *session = (janus_videocall_session *)handle->plugin_handle;
+	session->has_started = TRUE;
+	if (session->peer->has_started){
+		JANUS_LOG(LOG_INFO, "A CALL STARTING...\n");
+	}
 	if(!session) {
 		JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
 		return;
@@ -888,6 +903,7 @@ void janus_videocall_slow_link(janus_plugin_session *handle, int uplink, int vid
 }
 
 static void janus_videocall_recorder_close(janus_videocall_session *session) {
+
 	if(session->arc) {
 		janus_recorder *rc = session->arc;
 		session->arc = NULL;
@@ -908,6 +924,16 @@ static void janus_videocall_recorder_close(janus_videocall_session *session) {
 		janus_recorder_close(rc);
 		JANUS_LOG(LOG_INFO, "Closed data recording %s\n", rc->filename ? rc->filename : "??");
 		janus_recorder_destroy(rc);
+	}
+	session->has_started = FALSE;
+	if (!session->vrc && !session->arc && !session->peer->vrc && !session->peer->arc && !session->drc && !session->peer->drc){
+		if(notify_events && gateway->events_is_enabled()) {
+				JANUS_LOG(LOG_ERR, "\nSend a record event %s\n", session->record_path);
+				json_t *info = json_object();
+				json_object_set_new(info, "event", json_string("record"));
+				json_object_set_new(info, "path", json_string(session->record_path));
+				gateway->notify_event(&janus_videocall_plugin, session->handle, info);
+		}		
 	}
 }
 
@@ -950,7 +976,7 @@ void janus_videocall_hangup_media(janus_plugin_session *handle) {
 			json_object_set_new(info, "reason", json_string("Remote WebRTC hangup"));
 			gateway->notify_event(&janus_videocall_plugin, peer->handle, info);
 		}
-	}
+	} 
 	/* Reset controls */
 	session->has_audio = FALSE;
 	session->has_video = FALSE;
@@ -1083,6 +1109,7 @@ static void *janus_videocall_handler(void *data) {
 			json_object_set_new(result, "username", json_string(username_text));
 			/* Also notify event handlers */
 			if(notify_events && gateway->events_is_enabled()) {
+				JANUS_LOG(LOG_INFO, "\nSend a event\n");
 				json_t *info = json_object();
 				json_object_set_new(info, "event", json_string("registered"));
 				json_object_set_new(info, "username", json_string(username_text));
@@ -1454,8 +1481,10 @@ static void *janus_videocall_handler(void *data) {
 						memset(filename, 0, 255);
 						if(recording_base) {
 							/* Use the filename and path we have been provided */
-							g_snprintf(filename, 255, "%s-audio", recording_base);
+							g_snprintf(filename, 255, "%s/audio-%s", recording_base, session->username);
 							session->arc = janus_recorder_create(NULL, janus_audiocodec_name(session->acodec), filename);
+							if (session->record_path == NULL)
+								session->record_path = g_strdup(session->arc->dir);
 							if(session->arc == NULL) {
 								/* FIXME We should notify the fact the recorder could not be created */
 								JANUS_LOG(LOG_ERR, "Couldn't open an audio recording file for this VideoCall user!\n");
@@ -1478,7 +1507,8 @@ static void *janus_videocall_handler(void *data) {
 						memset(filename, 0, 255);
 						if(recording_base) {
 							/* Use the filename and path we have been provided */
-							g_snprintf(filename, 255, "%s-video", recording_base);
+							g_snprintf(filename, 255, "%s/video-%s", recording_base, session->username);
+							
 							session->vrc = janus_recorder_create(NULL, janus_videocodec_name(session->vcodec), filename);
 							if(session->vrc == NULL) {
 								/* FIXME We should notify the fact the recorder could not be created */
@@ -1500,7 +1530,7 @@ static void *janus_videocall_handler(void *data) {
 						JANUS_LOG(LOG_VERB, "Recording video, sending a PLI to kickstart it\n");
 						gateway->send_pli(session->handle);
 					}
-					if(session->has_data) {
+					if(!session->has_data) { // disable
 						memset(filename, 0, 255);
 						if(recording_base) {
 							/* Use the filename and path we have been provided */
