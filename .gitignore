@@ -31,7 +31,12 @@ Makefile.in
 /config.status
 /config.sub
 
+/*.mjr
 /*.o
+/plugins/recordings/*.mkv
+/plugins/recordings/*.webm
+/plugins/recordings/*.mjr
+/plugins/recordings/*.opus
 /plugins/*.o
 /plugins/*.lo
 /plugins/*.la
