@@ -357,18 +357,23 @@ typedef struct janus_videocall_message {
 	json_t *message;
 	json_t *jsep;
 } janus_videocall_message;
-
-typedef struct janus_videocall {
-	guint64 videocall_id;
-	gint64 start_time;
-	char* record_path;
-	
-}
+static GAsyncQueue *messages = NULL;
+static janus_videocall_message exit_message;
 
 typedef struct janus_videocall_session {
+//	guint64 videocall_id;
+	gint64 start_time;
+	gboolean started;
+	uint32_t call_time;
+	gboolean record_enable;
+	json_t *record_path;
+	janus_mutex mutex;
+	janus_refcount ref;
+} janus_videocall_session;
+
+typedef struct janus_user_session {
 	// new attributes
-	gboolean has_started;
-	char* record_path;
+	janus_videocall_session *call;
 	// end new attributes
 	janus_plugin_session *handle;
 	gchar *username;
@@ -381,7 +386,7 @@ typedef struct janus_videocall_session {
 	janus_videocodec vcodec;/* Codec used for video, if available */
 	uint32_t bitrate, peer_bitrate;
 	guint16 slowlink_count;
-	struct janus_videocall_session *peer;
+	struct janus_user_session *peer;
 	janus_rtp_switching_context context;
 	uint32_t ssrc[3];		/* Only needed in case VP8 (or H.264) simulcasting is involved */
 	char *rid[3];			/* Only needed if simulcasting is rid-based */
@@ -395,21 +400,29 @@ typedef struct janus_videocall_session {
 	volatile gint hangingup;
 	volatile gint destroyed;
 	janus_refcount ref;
-} janus_videocall_session;
+} janus_user_session;
 static GHashTable *sessions;
 static janus_mutex sessions_mutex = JANUS_MUTEX_INITIALIZER;
 
-static void janus_videocall_session_destroy(janus_videocall_session *session) {
+static void janus_user_session_destroy(janus_user_session *session) {
 	if(session && g_atomic_int_compare_and_exchange(&session->destroyed, 0, 1))
 		janus_refcount_decrease(&session->ref);
 }
 
-static void janus_videocall_session_free(const janus_refcount *session_ref) {
-	janus_videocall_session *session = janus_refcount_containerof(session_ref, janus_videocall_session, ref);
+static void janus_user_session_free(const janus_refcount *session_ref) {
+	janus_user_session *session = janus_refcount_containerof(session_ref, janus_user_session, ref);
 	/* Remove the reference to the core plugin session */
 	janus_refcount_decrease(&session->handle->ref);
 	/* This session can be destroyed, free all the resources */
+	janus_refcount_decrease(&session->call->ref);
 	g_free(session->username);
+	g_free(session);
+}
+
+static void janus_videocall_session_free(const janus_refcount *session_ref) {
+	janus_videocall_session *session = janus_refcount_containerof(session_ref, janus_videocall_session, ref);
+	/* This session can be destroyed, free all the resources */
+	g_free(session->record_path);
 	g_free(session);
 }
 
@@ -418,7 +431,7 @@ static void janus_videocall_message_free(janus_videocall_message *msg) {
 		return;
 
 	if(msg->handle && msg->handle->plugin_handle) {
-		janus_videocall_session *session = (janus_videocall_session *)msg->handle->plugin_handle;
+		janus_user_session *session = (janus_user_session *)msg->handle->plugin_handle;
 		janus_refcount_decrease(&session->ref);
 	}
 	msg->handle = NULL;
@@ -489,7 +502,7 @@ int janus_videocall_init(janus_callbacks *callback, const char *config_path) {
 	janus_config_destroy(config);
 	config = NULL;
 
-	sessions = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, (GDestroyNotify)janus_videocall_session_destroy);
+	sessions = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, (GDestroyNotify)janus_user_session_destroy);
 	messages = g_async_queue_new_full((GDestroyNotify) janus_videocall_message_free);
 	/* This is the callback we'll need to invoke to contact the Janus core */
 	gateway = callback;
@@ -564,9 +577,7 @@ void janus_videocall_create_session(janus_plugin_session *handle, int *error) {
 		*error = -1;
 		return;
 	}
-	janus_videocall_session *session = g_malloc0(sizeof(janus_videocall_session));
-	session->has_started = FALSE;
-	session->record_path = NULL;
+	janus_user_session *session = g_malloc0(sizeof(janus_user_session));
 	session->handle = handle;
 	session->has_audio = FALSE;
 	session->has_video = FALSE;
@@ -585,7 +596,7 @@ void janus_videocall_create_session(janus_plugin_session *handle, int *error) {
 	g_atomic_int_set(&session->hangingup, 0);
 	g_atomic_int_set(&session->destroyed, 0);
 	handle->plugin_handle = session;
-	janus_refcount_init(&session->ref, janus_videocall_session_free);
+	janus_refcount_init(&session->ref, janus_user_session_free);
 
 	return;
 }
@@ -595,7 +606,7 @@ void janus_videocall_destroy_session(janus_plugin_session *handle, int *error) {
 		*error = -1;
 		return;
 	}
-	janus_videocall_session *session = (janus_videocall_session *)handle->plugin_handle;
+	janus_user_session *session = (janus_user_session *)handle->plugin_handle;
 	if(!session) {
 		JANUS_LOG(LOG_ERR, "No VideoCall session associated with this handle...\n");
 		*error = -2;
@@ -608,7 +619,7 @@ void janus_videocall_destroy_session(janus_plugin_session *handle, int *error) {
 		int res = g_hash_table_remove(sessions, (gpointer)session->username);
 		JANUS_LOG(LOG_VERB, "  -- Removed: %d\n", res);
 	} else {
-		janus_videocall_session_destroy(session);
+		janus_user_session_destroy(session);
 	}
 	janus_mutex_unlock(&sessions_mutex);
 	return;
@@ -618,14 +629,14 @@ json_t *janus_videocall_query_session(janus_plugin_session *handle) {
 	if(g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized)) {
 		return NULL;
 	}
-	janus_videocall_session *session = (janus_videocall_session *)handle->plugin_handle;
+	janus_user_session *session = (janus_user_session *)handle->plugin_handle;
 	if(!session) {
 		JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
 		return NULL;
 	}
 	janus_refcount_increase(&session->ref);
 	/* Provide some generic info, e.g., if we're in a call and with whom */
-	janus_videocall_session *peer = session->peer;
+	janus_user_session *peer = session->peer;
 	json_t *info = json_object();
 	json_object_set_new(info, "state", json_string(session->peer ? "incall" : "idle"));
 	json_object_set_new(info, "username", session->username ? json_string(session->username) : NULL);
@@ -672,7 +683,7 @@ json_t *janus_videocall_query_session(janus_plugin_session *handle) {
 struct janus_plugin_result *janus_videocall_handle_message(janus_plugin_session *handle, char *transaction, json_t *message, json_t *jsep) {
 	if(g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized))
 		return janus_plugin_result_new(JANUS_PLUGIN_ERROR, g_atomic_int_get(&stopping) ? "Shutting down" : "Plugin not initialized", NULL);
-	janus_videocall_session *session = (janus_videocall_session *)handle->plugin_handle;
+	janus_user_session *session = (janus_user_session *)handle->plugin_handle;
 	if(!session)
 		return janus_plugin_result_new(JANUS_PLUGIN_ERROR, "No session associated with this handle", NULL);
 
@@ -694,15 +705,20 @@ void janus_videocall_setup_media(janus_plugin_session *handle) {
 	JANUS_LOG(LOG_INFO, "[%s-%p] WebRTC media is now available\n", JANUS_VIDEOCALL_PACKAGE, handle);
 	if(g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized))
 		return;
-	janus_videocall_session *session = (janus_videocall_session *)handle->plugin_handle;
-	session->has_started = TRUE;
-	if (session->peer->has_started){
-		JANUS_LOG(LOG_INFO, "A CALL STARTING...\n");
-	}
+	janus_user_session *session = (janus_user_session *)handle->plugin_handle;
 	if(!session) {
 		JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
 		return;
 	}
+	janus_mutex_lock(&session->call->mutex);
+	if (session->call->started == FALSE){
+		session->call->started = TRUE;
+		session->call->record_enable = FALSE;
+		session->call->start_time = janus_get_monotonic_time();
+		JANUS_LOG(LOG_ERR, "A CALL HAS STARTED!\n");
+	} 
+	janus_mutex_unlock(&session->call->mutex);
+
 	if(g_atomic_int_get(&session->destroyed))
 		return;
 	g_atomic_int_set(&session->hangingup, 0);
@@ -714,12 +730,12 @@ void janus_videocall_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 		return;
 	if(gateway) {
 		/* Honour the audio/video active flags */
-		janus_videocall_session *session = (janus_videocall_session *)handle->plugin_handle;
+		janus_user_session *session = (janus_user_session *)handle->plugin_handle;
 		if(!session) {
 			JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
 			return;
 		}
-		janus_videocall_session *peer = session->peer;
+		janus_user_session *peer = session->peer;
 		if(!peer) {
 			JANUS_LOG(LOG_ERR, "Session has no peer...\n");
 			return;
@@ -803,12 +819,12 @@ void janus_videocall_incoming_rtcp(janus_plugin_session *handle, janus_plugin_rt
 	if(handle == NULL || g_atomic_int_get(&handle->stopped) || g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized))
 		return;
 	if(gateway) {
-		janus_videocall_session *session = (janus_videocall_session *)handle->plugin_handle;
+		janus_user_session *session = (janus_user_session *)handle->plugin_handle;
 		if(!session) {
 			JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
 			return;
 		}
-		janus_videocall_session *peer = session->peer;
+		janus_user_session *peer = session->peer;
 		if(!peer) {
 			JANUS_LOG(LOG_ERR, "Session has no peer...\n");
 			return;
@@ -831,12 +847,12 @@ void janus_videocall_incoming_data(janus_plugin_session *handle, janus_plugin_da
 	if(handle == NULL || g_atomic_int_get(&handle->stopped) || g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized))
 		return;
 	if(gateway) {
-		janus_videocall_session *session = (janus_videocall_session *)handle->plugin_handle;
+		janus_user_session *session = (janus_user_session *)handle->plugin_handle;
 		if(!session) {
 			JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
 			return;
 		}
-		janus_videocall_session *peer = session->peer;
+		janus_user_session *peer = session->peer;
 		if(!peer) {
 			JANUS_LOG(LOG_ERR, "Session has no peer...\n");
 			return;
@@ -867,7 +883,7 @@ void janus_videocall_slow_link(janus_plugin_session *handle, int uplink, int vid
 	/* The core is informing us that our peer got or sent too many NACKs, are we pushing media too hard? */
 	if(handle == NULL || g_atomic_int_get(&handle->stopped) || g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized))
 		return;
-	janus_videocall_session *session = (janus_videocall_session *)handle->plugin_handle;
+	janus_user_session *session = (janus_user_session *)handle->plugin_handle;
 	if(!session) {
 		JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
 		return;
@@ -902,7 +918,7 @@ void janus_videocall_slow_link(janus_plugin_session *handle, int uplink, int vid
 	}
 }
 
-static void janus_videocall_recorder_close(janus_videocall_session *session) {
+static void janus_videocall_recorder_close(janus_user_session *session) {
 
 	if(session->arc) {
 		janus_recorder *rc = session->arc;
@@ -925,23 +941,22 @@ static void janus_videocall_recorder_close(janus_videocall_session *session) {
 		JANUS_LOG(LOG_INFO, "Closed data recording %s\n", rc->filename ? rc->filename : "??");
 		janus_recorder_destroy(rc);
 	}
-	session->has_started = FALSE;
-	if (!session->vrc && !session->arc && !session->peer->vrc && !session->peer->arc && !session->drc && !session->peer->drc){
-		if(notify_events && gateway->events_is_enabled()) {
-				JANUS_LOG(LOG_ERR, "\nSend a record event %s\n", session->record_path);
-				json_t *info = json_object();
-				json_object_set_new(info, "event", json_string("record"));
-				json_object_set_new(info, "path", json_string(session->record_path));
-				gateway->notify_event(&janus_videocall_plugin, session->handle, info);
-		}		
-	}
+	// if (!session->vrc && !session->arc && !session->peer->vrc && !session->peer->arc && !session->drc && !session->peer->drc){
+	// 	if(notify_events && gateway->events_is_enabled()) {
+	// 			JANUS_LOG(LOG_ERR, "\nSend a record event %s\n", session->record_path);
+	// 			json_t *info = json_object();
+	// 			json_object_set_new(info, "event", json_string("record"));
+	// 			json_object_set_new(info, "path", json_string(session->record_path));
+	// 			gateway->notify_event(&janus_videocall_plugin, session->handle, info);
+	// 	}		
+	// }
 }
 
 void janus_videocall_hangup_media(janus_plugin_session *handle) {
 	JANUS_LOG(LOG_INFO, "[%s-%p] No WebRTC media anymore\n", JANUS_VIDEOCALL_PACKAGE, handle);
 	if(g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized))
 		return;
-	janus_videocall_session *session = (janus_videocall_session *)handle->plugin_handle;
+	janus_user_session *session = (janus_user_session *)handle->plugin_handle;
 	if(!session) {
 		JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
 		return;
@@ -951,10 +966,27 @@ void janus_videocall_hangup_media(janus_plugin_session *handle) {
 	if(!g_atomic_int_compare_and_exchange(&session->hangingup, 0, 1))
 		return;
 	/* Get rid of the recorders, if available */
-	janus_mutex_lock(&session->rec_mutex);
-	janus_videocall_recorder_close(session);
-	janus_mutex_unlock(&session->rec_mutex);
-	janus_videocall_session *peer = session->peer;
+	if (session->call) {
+		janus_mutex_lock(&session->call->mutex);
+		if (session->call->started == TRUE){
+			janus_mutex_lock(&session->rec_mutex);
+			janus_videocall_recorder_close(session);
+			janus_mutex_unlock(&session->rec_mutex);
+			janus_mutex_lock(&session->peer->rec_mutex);
+			janus_videocall_recorder_close(session->peer);
+			janus_mutex_unlock(&session->peer->rec_mutex);
+			if(notify_events && gateway->events_is_enabled() && session->call->record_enable) {
+				JANUS_LOG(LOG_ERR, "\nSend a record event\n");
+				json_t *info = json_object();
+				json_object_set_new(info, "event", json_string("record"));
+				json_object_set_new(info, "path", session->call->record_path);
+				gateway->notify_event(&janus_videocall_plugin, session->handle, info);
+			}					
+			session->call->started = FALSE;
+		}
+		janus_mutex_unlock(&session->call->mutex);
+	}
+	janus_user_session *peer = session->peer;
 	session->peer = NULL;
 	if(peer) {
 		/* Send event to our peer too */
@@ -1018,7 +1050,7 @@ static void *janus_videocall_handler(void *data) {
 			janus_videocall_message_free(msg);
 			continue;
 		}
-		janus_videocall_session *session = (janus_videocall_session *)msg->handle->plugin_handle;
+		janus_user_session *session = (janus_user_session *)msg->handle->plugin_handle;
 		if(!session) {
 			JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
 			janus_videocall_message_free(msg);
@@ -1066,7 +1098,7 @@ static void *janus_videocall_handler(void *data) {
 			gpointer value;
 			g_hash_table_iter_init(&iter, sessions);
 			while (g_hash_table_iter_next(&iter, NULL, &value)) {
-				janus_videocall_session *user = value;
+				janus_user_session *user = value;
 				if(user != NULL) {
 					janus_refcount_increase(&user->ref);
 					if(user->username != NULL)
@@ -1109,7 +1141,6 @@ static void *janus_videocall_handler(void *data) {
 			json_object_set_new(result, "username", json_string(username_text));
 			/* Also notify event handlers */
 			if(notify_events && gateway->events_is_enabled()) {
-				JANUS_LOG(LOG_INFO, "\nSend a event\n");
 				json_t *info = json_object();
 				json_object_set_new(info, "event", json_string("registered"));
 				json_object_set_new(info, "username", json_string(username_text));
@@ -1162,7 +1193,7 @@ static void *janus_videocall_handler(void *data) {
 				goto error;
 			}
 			janus_mutex_lock(&sessions_mutex);
-			janus_videocall_session *peer = g_hash_table_lookup(sessions, username_text);
+			janus_user_session *peer = g_hash_table_lookup(sessions, username_text);
 			if(peer == NULL || g_atomic_int_get(&peer->destroyed)) {
 				g_atomic_int_set(&session->incall, 0);
 				janus_mutex_unlock(&sessions_mutex);
@@ -1266,7 +1297,7 @@ static void *janus_videocall_handler(void *data) {
 			}
 		} else if(!strcasecmp(request_text, "accept")) {
 			/* Accept a call from another peer */
-			janus_videocall_session *peer = session->peer;
+			janus_user_session *peer = session->peer;
 			if(peer == NULL || !g_atomic_int_get(&session->incall) || !g_atomic_int_get(&peer->incall)) {
 				JANUS_LOG(LOG_ERR, "No incoming call to accept\n");
 				error_code = JANUS_VIDEOCALL_ERROR_NO_CALL;
@@ -1335,6 +1366,25 @@ static void *janus_videocall_handler(void *data) {
 			} else if(peer) {
 				peer->vcodec = session->vcodec;
 			}
+			// create video call sesssion
+			janus_videocall_session *videocall_session = g_malloc0(sizeof(janus_videocall_session));
+			janus_mutex_init(&videocall_session->mutex);
+			janus_refcount_init(&videocall_session->ref, janus_videocall_session_free);
+			videocall_session->started = FALSE;
+			videocall_session->start_time = 0;
+			videocall_session->call_time = 0;
+			videocall_session->record_path = json_object();
+
+			json_object_set_new(videocall_session->record_path, "dir", json_string("/home/bangtv2/MySpace/Working/Develop/video-call/plugins/recordings"));
+			json_object_set_new(videocall_session->record_path, "peer_1", json_string(session->username));
+			json_object_set_new(videocall_session->record_path, "peer_2", json_string(peer->username));
+
+			session->call = videocall_session;
+			peer->call = videocall_session;
+			janus_refcount_increase(&videocall_session->ref);
+			janus_refcount_increase(&videocall_session->ref);
+
+
 			janus_sdp_destroy(answer);
 			/* Send SDP to our peer */
 			json_t *jsep = json_pack("{ssss}", "type", msg_sdp_type, "sdp", msg_sdp);
@@ -1383,6 +1433,7 @@ static void *janus_videocall_handler(void *data) {
 			json_t *recfile = json_object_get(root, "filename");
 			json_t *restart = json_object_get(root, "restart");
 			json_t *substream = json_object_get(root, "substream");
+			json_t *call_time = json_object_get(root, "time");
 			if(substream && (!json_is_integer(substream) || json_integer_value(substream) < 0 || json_integer_value(substream) > 2)) {
 				JANUS_LOG(LOG_ERR, "Invalid element (substream should be 0, 1 or 2)\n");
 				error_code = JANUS_VIDEOCALL_ERROR_INVALID_ELEMENT;
@@ -1414,7 +1465,7 @@ static void *janus_videocall_handler(void *data) {
 				JANUS_LOG(LOG_VERB, "Setting video bitrate: %"SCNu32"\n", session->bitrate);
 				gateway->send_remb(session->handle, session->bitrate ? session->bitrate : 10000000);
 			}
-			janus_videocall_session *peer = session->peer;
+			janus_user_session *peer = session->peer;
 			if(substream) {
 				session->sim_context.substream_target = json_integer_value(substream);
 				JANUS_LOG(LOG_VERB, "Setting video SSRC to let through (simulcast): %"SCNu32" (index %d, was %d)\n",
@@ -1460,6 +1511,7 @@ static void *janus_videocall_handler(void *data) {
 				}
 			}
 			if(record) {
+				session->call->record_enable = TRUE;
 				if(msg_sdp) {
 					session->has_audio = (strstr(msg_sdp, "m=audio") != NULL);
 					session->has_video = (strstr(msg_sdp, "m=video") != NULL);
@@ -1468,6 +1520,8 @@ static void *janus_videocall_handler(void *data) {
 				gboolean recording = json_is_true(record);
 				const char *recording_base = json_string_value(recfile);
 				JANUS_LOG(LOG_VERB, "Recording %s (base filename: %s)\n", recording ? "enabled" : "disabled", recording_base ? recording_base : "not provided");
+				const char *recording_path = json_string_value(json_object_get(session->call->record_path, "dir"));
+				JANUS_LOG(LOG_ERR, "Recording path: %s\n", recording_path);
 				janus_mutex_lock(&session->rec_mutex);
 				if(!recording) {
 					/* Not recording (anymore?) */
@@ -1483,18 +1537,20 @@ static void *janus_videocall_handler(void *data) {
 							/* Use the filename and path we have been provided */
 							g_snprintf(filename, 255, "%s/audio-%s", recording_base, session->username);
 							session->arc = janus_recorder_create(NULL, janus_audiocodec_name(session->acodec), filename);
-							if (session->record_path == NULL)
-								session->record_path = g_strdup(session->arc->dir);
+							// if (session->record_path == NULL)
+							// 	session->record_path = g_strdup(session->arc->dir);
 							if(session->arc == NULL) {
 								/* FIXME We should notify the fact the recorder could not be created */
 								JANUS_LOG(LOG_ERR, "Couldn't open an audio recording file for this VideoCall user!\n");
 							}
 						} else {
 							/* Build a filename */
-							g_snprintf(filename, 255, "videocall-%s-%s-%"SCNi64"-audio",
-								session->username ? session->username : "unknown",
-								(peer && peer->username) ? peer->username : "unknown",
-								now);
+							// g_snprintf(filename, 255, "videocall-%s-%s-%"SCNi64"-audio",
+							// 	session->username ? session->username : "unknown",
+							// 	(peer && peer->username) ? peer->username : "unknown",
+							// 	now);
+							g_snprintf(filename, 255, "%s/%s_audio", recording_path, session->username);
+							JANUS_LOG(LOG_VERB, "\nAudio file: %s\n", filename);
 							session->arc = janus_recorder_create(NULL, janus_audiocodec_name(session->acodec), filename);
 							if(session->arc == NULL) {
 								/* FIXME We should notify the fact the recorder could not be created */
@@ -1516,10 +1572,12 @@ static void *janus_videocall_handler(void *data) {
 							}
 						} else {
 							/* Build a filename */
-							g_snprintf(filename, 255, "videocall-%s-%s-%"SCNi64"-video",
-								session->username ? session->username : "unknown",
-								(peer && peer->username) ? peer->username : "unknown",
-								now);
+							// g_snprintf(filename, 255, "videocall-%s-%s-%"SCNi64"-video",
+							// 	session->username ? session->username : "unknown",
+							// 	(peer && peer->username) ? peer->username : "unknown",
+							// 	now);
+							g_snprintf(filename, 255, "%s/%s_video", recording_path, session->username);
+							JANUS_LOG(LOG_VERB, "\nVideo file: %s\n", filename);
 							session->vrc = janus_recorder_create(NULL, janus_videocodec_name(session->vcodec), filename);
 							if(session->vrc == NULL) {
 								/* FIXME We should notify the fact the recorder could not be created */
@@ -1555,6 +1613,14 @@ static void *janus_videocall_handler(void *data) {
 					}
 				}
 				janus_mutex_unlock(&session->rec_mutex);
+			}
+			// set time *
+			if (call_time){
+				janus_mutex_lock(&session->call->mutex);
+				if (session->call->call_time == 0)
+					session->call->call_time = json_integer_value(call_time);
+				JANUS_LOG(LOG_ERR, "Setting video time: %d\n", session->call->call_time);
+				janus_mutex_unlock(&session->call->mutex);
 			}
 			/* Also notify event handlers */
 			if(notify_events && gateway->events_is_enabled()) {
@@ -1604,7 +1670,7 @@ static void *janus_videocall_handler(void *data) {
 			}
 			const char *hangup_text = hangup ? json_string_value(hangup) : "We did the hangup";
 			/* Hangup an ongoing call or reject an incoming one */
-			janus_videocall_session *peer = session->peer;
+			janus_user_session *peer = session->peer;
 			if(peer == NULL) {
 				JANUS_LOG(LOG_WARN, "No call to hangup\n");
 			} else {

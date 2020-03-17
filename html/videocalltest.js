@@ -242,8 +242,9 @@ $(document).ready(function () {
 														.unbind('click').click(doHangup);
 													
 													videocall.send({ "message": { "request": "set", 
-																				  "record": true, 
-																				  "filename": "/home/bangtv2/MySpace/Working/Develop/video-call/plugins/recordings"
+																				  //"record": true, 
+																				  "time": 5
+																				  //"filename": "/home/bangtv2/MySpace/Working/Develop/video-call/plugins/recordings"
 																				} 
 																   });	
 														

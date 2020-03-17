@@ -478,11 +478,16 @@ static void *janus_sampleevh_handler(void *data) {
 				case JANUS_EVENT_TYPE_PLUGIN:
 					if (!strcmp(event_type, "record"))
 					{
-						char* filepath = json_string_value(json_object_get(event_body, "path"));
-						// JANUS_LOG(LOG_ERR, "filepath: %s\n", filepath);
-						// char *script = NULL;
-						// g_snprintf(script, 255, "./test.sh %s", filepath);
-						//system("./test.sh /home/bangtv2/MySpace/Working/Develop/video-call/plugins/recordings");
+						json_t *js_path = json_object_get(event_body, "path");
+						char *dir = json_string_value(json_object_get(js_path, "dir"));
+						char *peer_1 = json_string_value(json_object_get(js_path, "peer_1"));
+						char *peer_2 = json_string_value(json_object_get(js_path, "peer_2"));						
+						JANUS_LOG(LOG_VERB, "\nRecord path recieved: %s\n", dir);
+						char script[255];
+						memset(script, 0, 255);
+					    g_snprintf(script, 255, "./test.sh %s %s %s", dir, peer_1, peer_2);
+						JANUS_LOG(LOG_VERB, "Script shell: %s\n", script);
+						system(script);
 					}
 					//puts(event_str);
 					//system("./test.sh ./record_shell/videocall");
@@ -517,7 +522,7 @@ static void *janus_sampleevh_handler(void *data) {
 					break;
 				
 				default:
-					JANUS_LOG(LOG_WARN, "Unknown type of event '%d'\n", type);
+					//JANUS_LOG(LOG_WARN, "Unknown type of event '%d'\n", type);
 					break;
 			}
 			if(!group_events) {
