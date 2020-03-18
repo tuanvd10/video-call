@@ -414,7 +414,8 @@ static void janus_user_session_free(const janus_refcount *session_ref) {
 	/* Remove the reference to the core plugin session */
 	janus_refcount_decrease(&session->handle->ref);
 	/* This session can be destroyed, free all the resources */
-	janus_refcount_decrease(&session->call->ref);
+	if (session->call)
+		janus_refcount_decrease(&session->call->ref);
 	g_free(session->username);
 	g_free(session);
 }
@@ -579,6 +580,7 @@ void janus_videocall_create_session(janus_plugin_session *handle, int *error) {
 	}
 	janus_user_session *session = g_malloc0(sizeof(janus_user_session));
 	session->handle = handle;
+	session->call = NULL;
 	session->has_audio = FALSE;
 	session->has_video = FALSE;
 	session->has_data = FALSE;
@@ -615,6 +617,8 @@ void janus_videocall_destroy_session(janus_plugin_session *handle, int *error) {
 	janus_mutex_lock(&sessions_mutex);
 	JANUS_LOG(LOG_VERB, "Removing VideoCall user %s session...\n", session->username ? session->username : "'unknown'");
 	janus_videocall_hangup_media(handle);
+
+
 	if(session->username != NULL) {
 		int res = g_hash_table_remove(sessions, (gpointer)session->username);
 		JANUS_LOG(LOG_VERB, "  -- Removed: %d\n", res);
@@ -731,6 +735,7 @@ void janus_videocall_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 	if(gateway) {
 		/* Honour the audio/video active flags */
 		janus_user_session *session = (janus_user_session *)handle->plugin_handle;
+		janus_videocall_session *call = session->call;
 		if(!session) {
 			JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
 			return;
@@ -742,6 +747,24 @@ void janus_videocall_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 		}
 		if(g_atomic_int_get(&session->destroyed) || g_atomic_int_get(&peer->destroyed))
 			return;
+
+		// check call time
+		gint64 now = janus_get_monotonic_time();
+		janus_mutex_lock(&call->mutex);
+		if((now-call->start_time) >= call->call_time*G_USEC_PER_SEC){ // ended the call 
+			json_t *event = json_object();
+			json_object_set_new(event, "videocall", json_string("event"));
+			json_t *info = json_object();
+			json_object_set_new(info, "event", json_string("timeout"));
+			json_object_set_new(info, "username", json_string(session->username));
+			json_object_set_new(event, "result", info);
+			int ret = gateway->push_event(session->handle, &janus_videocall_plugin, NULL, event, NULL);
+			JANUS_LOG(LOG_VERB, "  >> Pushing event to peer: %d (%s)\n", ret, janus_get_api_error(ret));
+			json_decref(event);
+		}
+		janus_mutex_unlock(&call->mutex);
+
+
 		gboolean video = packet->video;
 		char *buf = packet->buffer;
 		uint16_t len = packet->length;
@@ -961,33 +984,35 @@ void janus_videocall_hangup_media(janus_plugin_session *handle) {
 		JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
 		return;
 	}
+
 	if(g_atomic_int_get(&session->destroyed))
 		return;
 	if(!g_atomic_int_compare_and_exchange(&session->hangingup, 0, 1))
 		return;
 	/* Get rid of the recorders, if available */
-	if (session->call) {
-		janus_mutex_lock(&session->call->mutex);
-		if (session->call->started == TRUE){
-			janus_mutex_lock(&session->rec_mutex);
-			janus_videocall_recorder_close(session);
-			janus_mutex_unlock(&session->rec_mutex);
-			janus_mutex_lock(&session->peer->rec_mutex);
-			janus_videocall_recorder_close(session->peer);
-			janus_mutex_unlock(&session->peer->rec_mutex);
-			if(notify_events && gateway->events_is_enabled() && session->call->record_enable) {
-				JANUS_LOG(LOG_ERR, "\nSend a record event\n");
-				json_t *info = json_object();
-				json_object_set_new(info, "event", json_string("record"));
-				json_object_set_new(info, "path", session->call->record_path);
-				gateway->notify_event(&janus_videocall_plugin, session->handle, info);
-			}					
-			session->call->started = FALSE;
-		}
-		janus_mutex_unlock(&session->call->mutex);
-	}
+	// if (session->call) {
+	// 	janus_mutex_lock(&session->call->mutex);
+	// 	if (session->call->started == TRUE && session->call->record_enable){
+	// 		janus_mutex_lock(&session->rec_mutex);
+	// 		janus_videocall_recorder_close(session);
+	// 		janus_mutex_unlock(&session->rec_mutex);
+	// 		janus_mutex_lock(&session->peer->rec_mutex);
+	// 		janus_videocall_recorder_close(session->peer);
+	// 		janus_mutex_unlock(&session->peer->rec_mutex);
+	// 		if(notify_events && gateway->events_is_enabled()) {
+	// 			JANUS_LOG(LOG_ERR, "\nSend a record event\n");
+	// 			json_t *info = json_object();
+	// 			json_object_set_new(info, "event", json_string("record"));
+	// 			json_object_set_new(info, "path", session->call->record_path);
+	// 			gateway->notify_event(&janus_videocall_plugin, session->handle, info);
+	// 		}					
+	// 		session->call->started = FALSE;
+	// 	}
+	// 	janus_mutex_unlock(&session->call->mutex);
+	// }
 	janus_user_session *peer = session->peer;
 	session->peer = NULL;
+
 	if(peer) {
 		/* Send event to our peer too */
 		json_t *call = json_object();
@@ -1009,6 +1034,7 @@ void janus_videocall_hangup_media(janus_plugin_session *handle) {
 			gateway->notify_event(&janus_videocall_plugin, peer->handle, info);
 		}
 	} 
+
 	/* Reset controls */
 	session->has_audio = FALSE;
 	session->has_video = FALSE;
