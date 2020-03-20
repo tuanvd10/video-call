@@ -1,4 +1,4 @@
-// HASH MAP
+// hashmap
 function HashMap() {
     var e = [];
     return e.size = function () {
@@ -38,59 +38,58 @@ function HashMap() {
     }, e
 }
 
-
-// Video Call Client
-
-var server = null;
-
-
-
+// VideoCall class
 function VideoCall() {
+    this.server = null;
+    this.janus = null;
+    this.plugin = null;
+    this._onMethods = null;
+    this.myname = null;
+    this.peername = null;
+    this.isConnected = false;
+    this.isAttached = false;
+    this.jsep = {
+        offer: null,
+        answer: null
+    };
+}
+
+// init 
+VideoCall.prototype.init = function (callback) {
+    if (!Janus.isWebrtcSupported()) {
+        callback.error("No WebRTC support... ");
+        return;
+    }
     Janus.init({
-        debug: true, callback: (function () {
-            if (!Janus.isWebrtcSupported()) {
-                alert("No WebRTC support... ");
-                return;
-            }
+        debug: true,
+        callback: (function () {
             this.server = "http://" + window.location.hostname + ":8088/janus";
             this._onMethods = new HashMap();
-            console.log("Inited the Janus successfully!")
         }).bind(this)
     });
+    callback.success();
 }
-VideoCall.prototype.server = null;
-VideoCall.prototype.janus = null;
-VideoCall.prototype.plugin = null;
-VideoCall.prototype._onMethods = null;
-VideoCall.prototype.myname = null;
-VideoCall.prototype.peername = null;
-VideoCall.prototype.isConnected = false;
-VideoCall.prototype.isAttached = false;
-VideoCall.prototype.jsep = {
-    offer: null,
-    answer: null
-};
 
-// on 
+// add event to _onMethods 
 VideoCall.prototype.on = function (e, t) {
     this._onMethods.put(e, t);
 }
 
+// call event in _onMethods
 VideoCall.prototype.callOnEvent = function (e, t) {
     var r = this._onMethods.get(e);
     r ? t ? r.call(this, t) : r.call(this) : console.log("Please implement event: " + e)
 }
 
-// connect
-VideoCall.prototype.connect = function () {
-    console.log("server " + this.server);
+// connect to server
+VideoCall.prototype.connect = function (token_auth, callback) {
     var self = this;
     self.janus = new Janus(
         {
             server: this.server,
+            token: token_auth,
             success: function () {
                 self.isConnected = true;
-                // Attach to VideoCall plugin
                 self.janus.attach(
                     {
                         plugin: "janus.plugin.videocall",
@@ -179,6 +178,7 @@ VideoCall.prototype.connect = function () {
                                     } else if (event === 'hangup') {
                                         Janus.log("Call hung up by " + result["username"] + " (" + result["reason"] + ")!");
                                         self.plugin.hangup();
+                                        self.callOnEvent('hangup', result["username"]);
                                     }
                                     else if (event === "timeout") {
                                         Janus.log("The call timeout. Hangup by user " + result["username"]);
@@ -219,18 +219,15 @@ VideoCall.prototype.connect = function () {
                             bootbox.alert("  -- Error attaching plugin... " + error);
                         }
                     });
+                callback.success();
             },
             error: function (error) {
-                Janus.error(error);
-                console.log("Attached plugin failed!")
+                callback.error(error);
             },
             destroyed: function () {
                 window.location.reload();
             }
         });
-    if (!self.isConnected) {
-        console.log('Janus Connected');
-    }
 }
 
 // register user
@@ -239,10 +236,13 @@ VideoCall.prototype.register = function (username) {
     this.plugin.send({ "message": register });
 }
 
-// make call
+// make a call
 VideoCall.prototype.makeCall = function (peer, options) {
     // Call this user
     var self = this;
+    if (options.stream) {
+        console.log("Local stream: " + options.stream);
+    }
     this.plugin.createOffer(
         {
             media: { data: false },
@@ -251,7 +251,10 @@ VideoCall.prototype.makeCall = function (peer, options) {
                 Janus.debug("Got SDP!");
                 Janus.debug(jsep);
                 self.jsep.offer = jsep;
-                var body = { "request": "call", "username": peer };
+                var body = {
+                    "request": "call",
+                    "username": peer
+                };
                 self.plugin.send({ "message": body, "jsep": jsep });
             },
             error: function (error) {
@@ -261,12 +264,13 @@ VideoCall.prototype.makeCall = function (peer, options) {
         });
 }
 
+// answer a call
 VideoCall.prototype.answer = function (options) {
     var self = this;
     this.plugin.createAnswer(
         {
             jsep: self.jsep.answer,
-            media: { data: false },	
+            media: { data: false },
             stream: options.stream ? options.stream : null,
             success: function (jsep) {
                 Janus.debug("Got SDP!");
@@ -282,14 +286,16 @@ VideoCall.prototype.answer = function (options) {
         });
 }
 
+// reject a call
 VideoCall.prototype.reject = function () {
     this.hangup();
 }
 
+// hangup a call
 VideoCall.prototype.hangup = function () {
     var hangup = { "request": "hangup" };
-	this.plugin.send({ "message": hangup });
-	this.plugin.hangup();
+    this.plugin.send({ "message": hangup });
+    this.plugin.hangup();
 }
 
 

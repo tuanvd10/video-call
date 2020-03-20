@@ -27,14 +27,32 @@
         var videoOutput;
         var localstream;
         var videocall;
+        var token = '1231234';
         $(document).ready(function () {
             username = Math.random().toString(36).substring(7);
             videoInput = document.getElementById('myvideo');
             videoOutput = document.getElementById('remotevideo');
             openStreamAction();
-
             videocall = new VideoCall();
+            videocall.init({
+                success: function () {
+                    settingEventCall(videocall);
+                    videocall.connect(token, {
+                        success: function () {
+                            console.log("Video Call connected...");
+                        },
+                        error: function (error) {
+                            console.log("Video Call could not connect: " + error);
+                        }
+                    })
+                },
+                error: function (error) {
+                    console.log("Video Call could not init: " + error);
+                }
+            });
+        });
 
+        function settingEventCall(videocall) {
             videocall.on('registered', function (username) {
                 console.log("User " + username + "registered!")
                 $('#youok').removeClass('hide').show().html("Registered as '" + username + "'");
@@ -51,15 +69,38 @@
             videocall.on('calling', function () {
                 bootbox.alert("Waiting for the peer to answer...");
             });
-            videocall.on('answered', function(){
+            videocall.on('answered', function () {
                 bootbox.hideAll();
+                $('#call').removeAttr('disabled').html('Hangup')
+                    .removeClass("btn-success").addClass("btn-danger")
+                    .unbind('click').click(doHangup);
+            });
+            videocall.on('hangup', function (username) {
+                console.log("Hangup by user: " + username);
+                bootbox.hideAll();
+                $('#peer').removeAttr('disabled').val('');
+                $('#call').removeAttr('disabled').html('Call')
+                    .removeClass("btn-danger").addClass("btn-success")
+                    .unbind('click').click(doCall);
+                videoInput.pause();
+                videoOutput.srcObject = null;
             });
             videocall.on('addremotestream', function (stream) {
+                console.log("addremotestream: " + videoOutput);
                 videoOutput.srcObject = null;
-                videoOutput.srcObject = stream;
+                try {
+                    videoOutput.srcObject = stream;
+                } catch (e) {
+                    try {
+                        videoOutput.src = URL.createObjectURL(stream);
+                    } catch (e) {
+                        Janus.error("Error attaching stream to element");
+                    }
+                }
             });
             videocall.on('incomingcall', function (peername) {
                 bootbox.hideAll();
+                $('#peer').val(peername).attr('disabled', true);
                 incoming = bootbox.dialog({
                     message: "Incoming call from " + peername + "!",
                     title: "Incoming call",
@@ -76,7 +117,7 @@
                                         $('#peer').attr('disabled', true);
                                         $('#call').removeAttr('disabled').html('Hangup')
                                             .removeClass("btn-success").addClass("btn-danger")
-                                            .unbind('click').click(videocall.reject);
+                                            .unbind('click').click(doHangup);
                                         videoInput.play();
                                     },
                                     error: function (error) {
@@ -95,8 +136,7 @@
                     }
                 });
             });
-            videocall.connect();
-        });
+        }
 
         // functions
         function openStreamAction() {
@@ -139,7 +179,9 @@
             };
             videocall.makeCall(username, options);
         }
-
+        function doHangup() {
+            videocall.hangup();
+        }
         function checkEnter(field, event) {
             var theCode = event.keyCode ? event.keyCode : event.which ? event.which : event.charCode;
             if (theCode == 13) {
@@ -207,7 +249,7 @@
                                     <h3 class="panel-title">Remote Stream</h3>
                                 </div>
                                 <div class="panel-body" id="videoright">
-                                    <video class="rounded centered hide" id="remotevideo" width=320 height=240 autoplay
+                                    <video class="rounded centered" id="remotevideo" width=320 height=240 autoplay
                                         playsinline />
                                 </div>
                             </div>
