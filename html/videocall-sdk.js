@@ -139,19 +139,9 @@ VideoCall.prototype.connect = function (token_auth, callback) {
                                             Janus.log(peer + " accepted the call!");
                                             self.peername = peer;
                                         }
-                                        // Video call can start
                                         if (jsep)
                                             self.plugin.handleRemoteJsep({ jsep: jsep });
-                                        // self.plugin.send({
-                                        //     "message": {
-                                        //         "request": "set",
-                                        //         //"record": true, 
-                                        //         "time": 5
-                                        //         //"filename": "/home/bangtv2/MySpace/Working/Develop/video-call/plugins/recordings"
-                                        //     }
-                                        // });
                                         self.callOnEvent('answered');
-
                                     } else if (event === 'update') {
                                         // An 'update' event may be used to provide renegotiation attempts
                                         if (jsep) {
@@ -181,8 +171,8 @@ VideoCall.prototype.connect = function (token_auth, callback) {
                                         self.callOnEvent('hangup', result["username"]);
                                     }
                                     else if (event === "timeout") {
+                                        self.hangup();
                                         Janus.log("The call timeout. Hangup by user " + result["username"]);
-                                        //doHangup();
                                     }
                                 }
                             } else {
@@ -253,9 +243,13 @@ VideoCall.prototype.makeCall = function (peer, options) {
                 self.jsep.offer = jsep;
                 var body = {
                     "request": "call",
-                    "username": peer
+                    "username": peer,
+                    'videocall': options.isVideoCall ? options.isVideoCall : true,
+                    'record': options.isRecording ? options.isRecording : false,
+                    'duration': options.duration ? options.duration : null
                 };
                 self.plugin.send({ "message": body, "jsep": jsep });
+                Janus.debug("Call message: " + body);
             },
             error: function (error) {
                 Janus.error("WebRTC error...", error);

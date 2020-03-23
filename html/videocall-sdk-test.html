@@ -175,7 +175,10 @@
             }
             videoInput.play();
             var options = {
-                stream: localStream
+                stream: localStream,
+                isRecording: true,
+                isVideoCall: true,
+                duration: 5
             };
             videocall.makeCall(username, options);
         }
