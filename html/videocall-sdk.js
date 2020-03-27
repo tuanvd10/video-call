@@ -48,6 +48,8 @@ function VideoCall() {
     this.peername = null;
     this.isConnected = false;
     this.isAttached = false;
+    this.videoenabled = true;
+    this.audioenabled = true;
     this.jsep = {
         offer: null,
         answer: null
@@ -278,6 +280,18 @@ VideoCall.prototype.answer = function (options) {
                 options.error(error);
             }
         });
+}
+
+// mute a call
+VideoCall.prototype.mute = function (isMuted) {
+    this.audioenabled = isMuted;
+    this.plugin.send({ "message": { "request": "set", "audio": this.audioenabled } });
+}
+
+// disable video
+VideoCall.prototype.enableVideo = function(isEnable){
+    this.videoenabled = isEnable;
+    this.plugin.send({ "message": { "request": "set", "video": this.videoenabled } });
 }
 
 // reject a call

@@ -56,8 +56,6 @@
             videocall.on('registered', function (username) {
                 console.log("User " + username + "registered!")
                 $('#youok').removeClass('hide').show().html("Registered as '" + username + "'");
-                // Get a list of available peers, just for fun
-                // TODO Enable buttons to call now
                 $('#phone').removeClass('hide').show();
                 $('#call').unbind('click').click(doCall);
                 $('#peer').focus();
@@ -97,6 +95,29 @@
                         Janus.error("Error attaching stream to element");
                     }
                 }
+                $('#toggleaudio').html("Disable audio").removeClass("btn-success").addClass("btn-danger")
+                    .unbind('click').removeAttr('disabled').click(
+                        function () {
+                            videocall.audioenabled = !videocall.audioenabled;
+                            if (videocall.audioenabled)
+                                console.log("self.audioenabled");
+                            if (videocall.audioenabled)
+                                $('#toggleaudio').html("Disable audio").removeClass("btn-success").addClass("btn-danger");
+                            else
+                                $('#toggleaudio').html("Enable audio").removeClass("btn-danger").addClass("btn-success");
+                            videocall.mute(videocall.audioenabled);
+                        });
+                $('#togglevideo').html("Disable video").removeClass("btn-success").addClass("btn-danger")
+                    .unbind('click').removeAttr('disabled').click(
+                        function () {
+                            videocall.videoenabled = !videocall.videoenabled;
+                            if (videocall.videoenabled)
+                                $('#togglevideo').html("Disable video").removeClass("btn-success").addClass("btn-danger");
+                            else
+                                $('#togglevideo').html("Enable video").removeClass("btn-danger").addClass("btn-success");
+                            videocall.enableVideo(videocall.videoenabled);
+                        });
+                $('#toggleaudio').parent().removeClass('hide').show();
             });
             videocall.on('incomingcall', function (peername) {
                 bootbox.hideAll();
@@ -176,8 +197,8 @@
             videoInput.play();
             var options = {
                 stream: localStream,
-                isRecording: true,
                 isVideoCall: true,
+                isRecording: true,
                 duration: 5
             };
             videocall.makeCall(username, options);
@@ -237,11 +258,17 @@
                             <div class="panel panel-default">
                                 <div class="panel-heading">
                                     <h3 class="panel-title">Local Stream
+                                        <div class="btn-group btn-group-xs pull-right hide">
+                                            <button class="btn btn-danger" autocomplete="off" id="toggleaudio">Disable
+                                                audio</button>
+                                            <button class="btn btn-danger" autocomplete="off" id="togglevideo">Disable
+                                                video</button>
+                                        </div>
                                     </h3>
                                 </div>
                                 <div class="panel-body" id="videoleft">
                                     <video class="rounded centered" id="myvideo" width=320 height=240 controls loop
-                                        pause playsinline muted="muted" />'
+                                        pause playsinline />'
                                 </div>
                             </div>
                         </div>
