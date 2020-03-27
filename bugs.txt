@@ -1,0 +1,1 @@
+- ICE failed, add a TURN server and see about:webrtc for more details
