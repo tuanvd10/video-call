@@ -145,7 +145,6 @@ VideoCall.prototype.connect = function (token_auth, callback) {
                                             self.plugin.handleRemoteJsep({ jsep: jsep });
                                         self.callOnEvent('answered');
                                     } else if (event === 'update') {
-                                        // An 'update' event may be used to provide renegotiation attempts
                                         if (jsep) {
                                             if (jsep.type === "answer") {
                                                 self.plugin, handleRemoteJsep({ jsep: jsep });
@@ -153,7 +152,7 @@ VideoCall.prototype.connect = function (token_auth, callback) {
                                                 self.plugin, createAnswer(
                                                     {
                                                         jsep: jsep,
-                                                        media: { data: true },	// Let's negotiate data channels as well
+                                                        media: { data: true },
                                                         success: function (jsep) {
                                                             Janus.debug("Got SDP!");
                                                             Janus.debug(jsep);
@@ -162,7 +161,6 @@ VideoCall.prototype.connect = function (token_auth, callback) {
                                                         },
                                                         error: function (error) {
                                                             Janus.error("WebRTC error:", error);
-                                                            bootbox.alert("WebRTC error... " + JSON.stringify(error));
                                                         }
                                                     });
                                             }
@@ -178,37 +176,10 @@ VideoCall.prototype.connect = function (token_auth, callback) {
                                     }
                                 }
                             } else {
-                                // FIXME Error?
-                                var error = msg["error"];
-                                bootbox.alert(error);
-                                if (error.indexOf("already taken") > 0) {
-                                    // FIXME Use status codes...
-                                    $('#username').removeAttr('disabled').val("");
-                                    $('#register').removeAttr('disabled').unbind('click').click(registerUsername);
-                                }
-                                // TODO Reset status
-                                self.plugin, hangup();
-                                if (spinner !== null && spinner !== undefined)
-                                    spinner.stop();
-                                $('#waitingvideo').remove();
-                                $('#videos').hide();
-                                $('#peer').removeAttr('disabled').val('');
-                                $('#call').removeAttr('disabled').html('Call')
-                                    .removeClass("btn-danger").addClass("btn-success")
-                                    .unbind('click').click(doCall);
-                                $('#toggleaudio').attr('disabled', true);
-                                $('#togglevideo').attr('disabled', true);
-                                $('#bitrate').attr('disabled', true);
-                                $('#curbitrate').hide();
-                                $('#curres').hide();
-                                if (bitrateTimer !== null && bitrateTimer !== null)
-                                    clearInterval(bitrateTimer);
-                                bitrateTimer = null;
                             }
                         },
                         error: function (error) {
                             Janus.error("  -- Error attaching plugin...", error);
-                            bootbox.alert("  -- Error attaching plugin... " + error);
                         }
                     });
                 callback.success();
@@ -255,7 +226,6 @@ VideoCall.prototype.makeCall = function (peer, options) {
             },
             error: function (error) {
                 Janus.error("WebRTC error...", error);
-                bootbox.alert("WebRTC error... " + error);
             }
         });
 }
